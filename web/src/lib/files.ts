@@ -1,4 +1,4 @@
-import { readdir, lstat, stat, rename, rm, readFile } from "node:fs/promises";
+import { readdir, lstat, stat, rename, rm, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot } from "./paths";
 
@@ -48,7 +48,7 @@ export function safePath(rel: string): { abs: string; rel: string } {
 	const abs = path.resolve(root, clean);
 	const norm = path.relative(root, abs);
 
-	if (norm.startsWith("..") || path.isAbsolute(norm)) {
+	if (isOutside(norm)) {
 		throw new FileError("path di luar repo");
 	}
 	for (const part of norm.split(path.sep)) {
@@ -57,12 +57,50 @@ export function safePath(rel: string): { abs: string; rel: string } {
 	return { abs, rel: norm };
 }
 
+/** True when a path produced by path.relative() points outside its base. */
+function isOutside(norm: string): boolean {
+	// ".." alone or "../x" is outside; a directory merely named "..foo" is not.
+	return norm === ".." || norm.startsWith(`..${path.sep}`) || path.isAbsolute(norm);
+}
+
+/*
+ * safePath() is purely lexical, so it cannot see symlinks: a link inside the
+ * repo that points at /etc (or at the read-only ssh mount) passes it, and
+ * every fs call after that follows the link out of the tree - for a link in
+ * the middle of the path as well as at the end. guard() closes that by
+ * resolving the real location and re-checking it against the real repo root
+ * and the blocklist.
+ *
+ * followLeaf = true  for operations that read through the final component
+ *                    (listing a directory, previewing a file).
+ * followLeaf = false for operations that act on the entry itself (delete,
+ *                    rename, move): a symlink may be removed or renamed, but
+ *                    its parent directory must really live inside the repo.
+ *
+ * A check-then-use gap remains between guard() and the fs call that follows;
+ * closing it fully needs openat()-style APIs that node does not expose. The
+ * panel has a single admin, so the realistic threat is a link that already
+ * exists in the tree, which this does catch.
+ */
+async function guard(p: { abs: string; rel: string }, followLeaf: boolean): Promise<string> {
+	const root = await realpath(/*turbopackIgnore: true*/ repoRoot());
+	const probe = followLeaf || !p.rel ? p.abs : path.dirname(p.abs);
+	const real = await realpath(/*turbopackIgnore: true*/ probe);
+	const norm = path.relative(root, real);
+	if (isOutside(norm)) throw new FileError("path di luar repo");
+	for (const part of norm.split(path.sep)) {
+		if (BLOCKED_NAMES.includes(part)) throw new FileError(`<${part}> tidak boleh diakses`);
+	}
+	return real;
+}
+
 function hidden(name: string): boolean {
 	return BLOCKED_NAMES.includes(name);
 }
 
 export async function listDir(rel: string): Promise<{ rel: string; entries: Entry[] }> {
 	const p = safePath(rel);
+	await guard(p, true);
 	const names = await readdir(/*turbopackIgnore: true*/ p.abs);
 
 	const entries: Entry[] = [];
@@ -121,9 +159,14 @@ async function dirSize(abs: string, budget = { files: 20000 }): Promise<number> 
 
 export async function detail(rel: string): Promise<Detail> {
 	const p = safePath(rel);
+	await guard(p, false);
 	const s = await lstat(/*turbopackIgnore: true*/ p.abs);
 	const link = s.isSymbolicLink();
-	const real = link ? await stat(/*turbopackIgnore: true*/ p.abs).catch(() => null) : s;
+	// A symlink is only described by its target when that target is still
+	// inside the repo; otherwise it is shown as a plain, empty entry so the
+	// panel never sizes or lists anything outside the tree.
+	const inside = link ? await guard(p, true).then(() => true, () => false) : true;
+	const real = link ? (inside ? await stat(/*turbopackIgnore: true*/ p.abs).catch(() => null) : null) : s;
 	const dir = Boolean(real?.isDirectory());
 
 	const d: Detail = {
@@ -148,21 +191,41 @@ export async function detail(rel: string): Promise<Detail> {
 /** Text preview of a file, or null when it does not look like text. */
 export async function preview(rel: string, maxBytes = 120_000): Promise<string | null> {
 	const p = safePath(rel);
-	const s = await lstat(/*turbopackIgnore: true*/ p.abs);
-	if (s.isDirectory()) return null;
-	const buf = await readFile(/*turbopackIgnore: true*/ p.abs);
-	// Binary sniff: a NUL byte settles it, otherwise too many control bytes in
-	// the head mean this is not text (zips, apks, images) and only its details
-	// are shown.
-	const head = buf.subarray(0, Math.min(buf.length, 8000));
-	if (head.includes(0)) return null;
-	let odd = 0;
-	for (const byte of head) {
-		if (byte < 9 || (byte > 13 && byte < 32) || byte === 127) odd++;
+	await guard(p, true);
+
+	const fh = await open(/*turbopackIgnore: true*/ p.abs, "r");
+	try {
+		// Check the opened handle, not the path: it must be a regular file
+		// (a FIFO or device would block the read forever) and is what we read.
+		const st = await fh.stat();
+		if (!st.isFile()) return null;
+
+		// Read at most maxBytes + 1 instead of the whole file: output/ holds
+		// zips of hundreds of MB, and loading one just to show 120 KB of it
+		// can exhaust the memory of the panel process. The extra byte tells
+		// whether the file was truncated.
+		const want = Math.min(st.size, maxBytes + 1);
+		const buf = Buffer.alloc(want);
+		const { bytesRead } = await fh.read(buf, 0, want, 0);
+		const data = buf.subarray(0, bytesRead);
+
+		// Binary sniff: a NUL byte settles it, otherwise too many control bytes in
+		// the head mean this is not text (zips, apks, images) and only its details
+		// are shown.
+		const head = data.subarray(0, Math.min(data.length, 8000));
+		if (head.includes(0)) return null;
+		let odd = 0;
+		for (const byte of head) {
+			if (byte < 9 || (byte > 13 && byte < 32) || byte === 127) odd++;
+		}
+		if (head.length && odd / head.length > 0.1) return null;
+
+		const truncated = st.size > maxBytes;
+		const text = data.subarray(0, maxBytes).toString("utf8");
+		return truncated ? `${text}\n… (${st.size - maxBytes} byte lagi tidak ditampilkan)` : text;
+	} finally {
+		await fh.close();
 	}
-	if (head.length && odd / head.length > 0.1) return null;
-	const text = buf.subarray(0, maxBytes).toString("utf8");
-	return buf.length > maxBytes ? `${text}\n… (${buf.length - maxBytes} byte lagi tidak ditampilkan)` : text;
 }
 
 function checkName(name: string): string {
@@ -178,12 +241,14 @@ function checkName(name: string): string {
 export async function removeEntry(rel: string): Promise<void> {
 	const p = safePath(rel);
 	if (!p.rel) throw new FileError("root repo tidak bisa dihapus");
+	await guard(p, false);
 	await rm(/*turbopackIgnore: true*/ p.abs, { recursive: true, force: false });
 }
 
 export async function renameEntry(rel: string, name: string): Promise<string> {
 	const p = safePath(rel);
 	if (!p.rel) throw new FileError("root repo tidak bisa diganti nama");
+	await guard(p, false);
 	const n = checkName(name);
 	const dest = safePath(path.join(path.dirname(p.rel), n));
 	if (await exists(dest.abs)) throw new FileError(`<${n}> sudah ada`);
@@ -194,7 +259,9 @@ export async function renameEntry(rel: string, name: string): Promise<string> {
 export async function moveEntry(rel: string, destDir: string): Promise<string> {
 	const p = safePath(rel);
 	if (!p.rel) throw new FileError("root repo tidak bisa dipindah");
+	await guard(p, false);
 	const d = safePath(destDir);
+	await guard(d, true);
 	const ds = await lstat(/*turbopackIgnore: true*/ d.abs).catch(() => null);
 	if (!ds?.isDirectory()) throw new FileError(`<${d.rel || "/"}> bukan folder`);
 	// Moving a directory into itself would detach the whole subtree.

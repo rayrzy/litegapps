@@ -65,18 +65,28 @@ jobs:
           sed -i "s/^restore.sdk=.*/restore.sdk=${{ matrix.sdk }}/" "$CFG"
           sed -i "s/^litegapps.restore=.*/litegapps.restore=lite/" config
 
-      - name: Restore + build (skip quietly if this arch/sdk has no gapps on the server)
+      - name: Restore + build (skip if this arch/sdk has no gapps on the server)
         run: |
+          # build.sh restore exits 1 both when the gapps are not on the server
+          # and when the download itself failed, so the two cannot be told
+          # apart here. Skipping is still right for the first case, so skip -
+          # but as a visible warning on the run page, not a silent green job.
           if ! sh build.sh restore; then
-            echo "! No gapps available for ${{ matrix.arch }}/${{ matrix.sdk }} - skipping this combination"
+            echo "::warning title=Skipped ${{ matrix.arch }}/${{ matrix.sdk }}::restore failed (no gapps on the server, or a download error) - check this job's log if you expected a build"
             exit 0
           fi
-          bash build.sh make litegapps lite "${{ matrix.arch }}" "${{ matrix.sdk }}" || true
+          # Restore worked, so from here a failure is a real build failure and
+          # must fail the job instead of being swallowed.
+          bash build.sh make litegapps lite "${{ matrix.arch }}" "${{ matrix.sdk }}"
           # flatten into dist/ - upload-artifact preserves the glob's parent
           # dirs (the date folder), which would nest zips on download instead
           # of landing them flat next to each other.
           mkdir -p dist
           find output -name "*.zip" -exec cp {} dist/ \;
+          if ! ls dist/*.zip >/dev/null 2>&1; then
+            echo "::error title=No zip ${{ matrix.arch }}/${{ matrix.sdk }}::the build finished but produced no zip"
+            exit 1
+          fi
 
       - name: Upload zip (if any was produced)
         uses: actions/upload-artifact@v4
@@ -93,18 +103,32 @@ jobs:
     steps:
       - name: Resolve tag/prerelease
         id: vars
+        # Inputs and the tag name are user-controlled text. Passed through env
+        # they stay plain data; pasted into the script with ${{ }} they would
+        # be executed as shell.
+        env:
+          IN_TAG: ${{ inputs.tag }}
+          IN_PRERELEASE: ${{ inputs.prerelease }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          TAG="${{ inputs.tag }}"
+          TAG="$IN_TAG"
           if [ -z "$TAG" ]; then
-            if [ "${{ github.ref_type }}" = "tag" ]; then
-              TAG="${{ github.ref_name }}"
+            if [ "$REF_TYPE" = "tag" ]; then
+              TAG="$REF_NAME"
             else
-              TAG="lite-build-$(date +%Y%m%d)-${{ github.run_number }}"
+              TAG="lite-build-$(date +%Y%m%d)-$RUN_NUMBER"
             fi
           fi
-          PRERELEASE="${{ inputs.prerelease }}"
+          case "$TAG" in
+            ""|*[!A-Za-z0-9._+-]*)
+              echo "::error::release tag may only contain letters, digits and . _ + -"
+              exit 1 ;;
+          esac
+          PRERELEASE="$IN_PRERELEASE"
           if [ -z "$PRERELEASE" ]; then
-            if [ "${{ github.ref_type }}" = "tag" ]; then PRERELEASE=false; else PRERELEASE=true; fi
+            if [ "$REF_TYPE" = "tag" ]; then PRERELEASE=false; else PRERELEASE=true; fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
@@ -128,18 +152,20 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          PRERELEASE: ${{ steps.vars.outputs.prerelease }}
+          REPO: ${{ github.repository }}
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
-          NOTES="Automated LiteGapps lite build - SDK 29-36 x arm/arm64/x86_64, x86 up to SDK 35"
+          NOTES="Automated LiteGapps lite build - SDK 29-36 x arm/arm64/x86_64, x86 up to SDK 30"
           PRERELEASE_FLAG=""
-          [ "${{ steps.vars.outputs.prerelease }}" = "true" ] && PRERELEASE_FLAG="--prerelease"
+          [ "$PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
           cd collected
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$TAG" *.zip SHA256SUMS.txt --clobber --repo "${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" *.zip SHA256SUMS.txt --clobber --repo "$REPO"
           else
             gh release create "$TAG" *.zip SHA256SUMS.txt \
               --title "$TAG" \
               --notes "$NOTES" \
               $PRERELEASE_FLAG \
-              --repo "${{ github.repository }}"
+              --repo "$REPO"
           fi

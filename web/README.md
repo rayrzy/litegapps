@@ -124,7 +124,8 @@ Two things it guards against, both learned the hard way on unpackgamesnew:
 
 Follow the logs with `sudo docker compose -p litegapps-web logs -f web`.
 
-The panel listens on `$WEB_BIND:$WEB_PORT` (default `0.0.0.0:3020`); the port
+The panel listens on `$WEB_BIND:$WEB_PORT` (default `127.0.0.1:3020`, loopback
+only - see [Exposure](#exposure) to open it up); the port
 is configurable because other projects on the VPS already hold 3000 and 3010.
 The container mounts the repo at `/litegapps` and your ssh directory
 read-only at `/ssh-host`.
@@ -391,15 +392,25 @@ the snap base instead ("Ubuntu Core 24") — set
 
 ## Exposure
 
-The panel is plain http on the VPS's public address, and it can trigger
-uploads to SourceForge with your release key. The password and session cookie
-therefore cross the internet unencrypted. Ways to narrow that, cheapest first:
+The panel is plain http, and it can trigger uploads to SourceForge with your
+release key. It therefore binds to `127.0.0.1` by default; if you set
+`WEB_BIND=0.0.0.0` the password and session cookie cross the internet
+unencrypted. Put it behind an https reverse proxy (and set `SITE_URL` to the
+`https://` address and `TRUST_PROXY=1`), or use one of the narrower options,
+cheapest first:
 
+- An ssh tunnel (`ssh -L 3020:127.0.0.1:3020 user@vps`) with the default bind.
 - `WEB_BIND=10.8.0.2` — listen on the WireGuard address only, so the panel is
   reachable over the VPN and not from the internet at all.
 - A firewall rule allowing `WEB_PORT` from your own address only
   (`ufw` is currently inactive on this host).
 - A strong `ADMIN_PASSWORD`.
+
+Login is throttled: 5 failed attempts within 15 minutes lock that client
+address and that username for the rest of the window. Without `TRUST_PROXY=1`
+all clients share one address key (the `X-Forwarded-For` header is
+client-controlled, so it is ignored), which still caps the total guessing rate.
+The counters live in memory and reset when the panel restarts.
 
 The session cookie is marked `Secure` only when `SITE_URL` starts with
 `https://`: browsers refuse to store a Secure cookie over plain http, which

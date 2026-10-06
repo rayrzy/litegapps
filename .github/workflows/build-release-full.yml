@@ -60,15 +60,40 @@ jobs:
 
       - name: Resolve variants/arch/sdk/tag/prerelease
         id: vars
+        # Inputs and the tag name are user-controlled text. Passed through env
+        # they stay plain data; pasted into the script with ${{ }} they would
+        # be executed as shell. They are also validated below, because later
+        # steps feed them to sed and to paths under core/.
+        env:
+          IN_VARIANTS: ${{ inputs.variants }}
+          IN_ARCH: ${{ inputs.arch }}
+          IN_SDK: ${{ inputs.sdk }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_PRERELEASE: ${{ inputs.prerelease }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          VARIANTS="${{ inputs.variants }}"
+          VARIANTS="$IN_VARIANTS"
           [ -z "$VARIANTS" ] && VARIANTS="pixel,micro,nano,basic,user,go,core,lite,superlite"
+          case "$VARIANTS" in
+            *[!a-z,]*)
+              echo "::error::variants must be lowercase names separated by commas"
+              exit 1 ;;
+          esac
 
-          ARCH="${{ inputs.arch }}"
+          ARCH="$IN_ARCH"
           [ -z "$ARCH" ] && ARCH="arm64"
+          case "$ARCH" in
+            arm|arm64|x86|x86_64) ;;
+            *) echo "::error::arch must be one of: arm arm64 x86 x86_64"; exit 1 ;;
+          esac
 
-          SDK="${{ inputs.sdk }}"
+          SDK="$IN_SDK"
           [ -z "$SDK" ] && SDK="36"
+          case "$SDK" in
+            *[!0-9]*) echo "::error::sdk must be a number"; exit 1 ;;
+          esac
 
           # Android 7.0 (SDK 24) is the oldest target built.
           if [ "$SDK" -lt 24 ]; then
@@ -88,18 +113,23 @@ jobs:
             exit 1
           fi
 
-          TAG="${{ inputs.tag }}"
+          TAG="$IN_TAG"
           if [ -z "$TAG" ]; then
-            if [ "${{ github.ref_type }}" = "tag" ]; then
-              TAG="${{ github.ref_name }}"
+            if [ "$REF_TYPE" = "tag" ]; then
+              TAG="$REF_NAME"
             else
-              TAG="full-build-$(date +%Y%m%d)-${{ github.run_number }}"
+              TAG="full-build-$(date +%Y%m%d)-$RUN_NUMBER"
             fi
           fi
+          case "$TAG" in
+            ""|*[!A-Za-z0-9._+-]*)
+              echo "::error::release tag may only contain letters, digits and . _ + -"
+              exit 1 ;;
+          esac
 
-          PRERELEASE="${{ inputs.prerelease }}"
+          PRERELEASE="$IN_PRERELEASE"
           if [ -z "$PRERELEASE" ]; then
-            if [ "${{ github.ref_type }}" = "tag" ]; then PRERELEASE=false; else PRERELEASE=true; fi
+            if [ "$REF_TYPE" = "tag" ]; then PRERELEASE=false; else PRERELEASE=true; fi
           fi
 
           echo "variants=$VARIANTS" >> "$GITHUB_OUTPUT"
@@ -109,10 +139,11 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Point every requested variant at arch/sdk
+        env:
+          ARCH: ${{ steps.vars.outputs.arch }}
+          SDK: ${{ steps.vars.outputs.sdk }}
+          VARIANTS: ${{ steps.vars.outputs.variants }}
         run: |
-          ARCH="${{ steps.vars.outputs.arch }}"
-          SDK="${{ steps.vars.outputs.sdk }}"
-          VARIANTS="${{ steps.vars.outputs.variants }}"
           for V in $(echo "$VARIANTS" | tr ',' ' '); do
             CFG="core/litegapps/$V/config"
             if [ -f "$CFG" ]; then
@@ -127,11 +158,12 @@ jobs:
           done
 
       - name: Restore + build, one variant at a time (cleans gapps/modules between each - runner disk can't hold all 9 at once)
+        env:
+          ARCH: ${{ steps.vars.outputs.arch }}
+          SDK: ${{ steps.vars.outputs.sdk }}
+          VARIANTS: ${{ steps.vars.outputs.variants }}
         run: |
           set -e
-          ARCH="${{ steps.vars.outputs.arch }}"
-          SDK="${{ steps.vars.outputs.sdk }}"
-          VARIANTS="${{ steps.vars.outputs.variants }}"
           for V in $(echo "$VARIANTS" | tr ',' ' '); do
             echo "::group::$V"
             # restore just this variant's gapps (litegapps_restore() loops the
@@ -163,18 +195,23 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          PRERELEASE: ${{ steps.vars.outputs.prerelease }}
+          ARCH: ${{ steps.vars.outputs.arch }}
+          SDK: ${{ steps.vars.outputs.sdk }}
+          VARIANTS: ${{ steps.vars.outputs.variants }}
+          REPO: ${{ github.repository }}
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
-          NOTES="Automated LiteGapps build - arch: ${{ steps.vars.outputs.arch }}, sdk: ${{ steps.vars.outputs.sdk }}, variants: ${{ steps.vars.outputs.variants }}"
+          NOTES="Automated LiteGapps build - arch: $ARCH, sdk: $SDK, variants: $VARIANTS"
           PRERELEASE_FLAG=""
-          [ "${{ steps.vars.outputs.prerelease }}" = "true" ] && PRERELEASE_FLAG="--prerelease"
+          [ "$PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
 
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$TAG" ./*.zip SHA256SUMS.txt --clobber --repo "${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" ./*.zip SHA256SUMS.txt --clobber --repo "$REPO"
           else
             gh release create "$TAG" ./*.zip SHA256SUMS.txt \
               --title "$TAG" \
               --notes "$NOTES" \
               $PRERELEASE_FLAG \
-              --repo "${{ github.repository }}"
+              --repo "$REPO"
           fi

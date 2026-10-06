@@ -64,6 +64,11 @@ export async function ensureAdmin(): Promise<void> {
 	}
 }
 
+// Verified against when the username does not exist, so an unknown account
+// takes as long to reject as a wrong password and the response time does not
+// reveal which usernames are real.
+let dummyHash: Promise<string> | null = null;
+
 export async function login(username: string, password: string): Promise<boolean> {
 	await ensureAdmin();
 	const c = db();
@@ -71,8 +76,18 @@ export async function login(username: string, password: string): Promise<boolean
 		"SELECT id, password_hash FROM users WHERE username = ? LIMIT 1",
 		[username],
 	);
-	if (rows.length === 0) return false;
+	if (rows.length === 0) {
+		dummyHash ??= hashPassword(randomBytes(16).toString("hex"));
+		await verifyPassword(password, await dummyHash);
+		return false;
+	}
 	if (!(await verifyPassword(password, rows[0].password_hash))) return false;
+
+	// Sessions are only ever rejected when expired, never deleted, so the table
+	// would grow forever. Logins are the only thing that adds rows, which makes
+	// this the natural moment to sweep (expires_at is indexed). A failed sweep
+	// must not block a valid login.
+	await c.query("DELETE FROM sessions WHERE expires_at < NOW()").catch(() => undefined);
 
 	const token = randomBytes(32).toString("hex");
 	await c.query(

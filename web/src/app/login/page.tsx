@@ -8,6 +8,7 @@ export const metadata = { title: "Masuk — LiteGapps" };
 const MESSAGES: Record<string, string> = {
 	invalid: "Nama pengguna atau kata sandi salah.",
 	empty: "Isi nama pengguna dan kata sandi.",
+	locked: "Terlalu banyak percobaan gagal. Coba lagi dalam beberapa menit.",
 };
 
 export default async function LoginPage({
