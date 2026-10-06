@@ -663,6 +663,42 @@ CLEAN(){
 #################################################
 # Upload
 #################################################
+# upload_zips <root>: scp every *.zip under <root> to the SourceForge FRS,
+# keeping the path relative to <root> (the FRS creates missing directories).
+# $USERNAME must be set. Returns 1 when there was nothing to upload or any
+# transfer failed - this used to print "done" and exit 0 either way.
+#
+# Plain sh: no arrays and no pipe into the loop (a pipe would run it in a
+# subshell and lose the counters), so the file list goes in through a here-doc.
+upload_zips(){
+	_uz_root=$1
+	if [ ! -d "$_uz_root" ]; then
+		printlog "! <$_uz_root> not found, nothing to upload"
+		return 1
+	fi
+	_uz_files=$(cd "$_uz_root" && find . -type f -name '*.zip' | sed 's|^\./||' | sort)
+	if [ -z "$_uz_files" ]; then
+		printlog "! no *.zip under <$_uz_root>, nothing to upload"
+		return 1
+	fi
+	_uz_total=0
+	_uz_failed=0
+	while IFS= read -r SC; do
+		_uz_total=$((_uz_total + 1))
+		TG=/home/frs/project/litegapps/$SC
+		printlog "- Uploading <$SC> to <$TG>"
+		# </dev/null: scp must never read the here-doc that feeds this loop.
+		if ! scp "$_uz_root/$SC" "$USERNAME@web.sourceforge.net:$TG" </dev/null; then
+			printlog "  ! upload FAILED: <$SC>"
+			_uz_failed=$((_uz_failed + 1))
+		fi
+	done <<UPLOAD_LIST
+$_uz_files
+UPLOAD_LIST
+	printlog "- Uploaded $((_uz_total - _uz_failed)) of $_uz_total file(s)"
+	[ "$_uz_failed" -eq 0 ]
+}
+
 UPLOAD(){
 	printlog " Litegapps Uploading files"
 	printlog " "
@@ -674,36 +710,15 @@ UPLOAD(){
 		exit 1
 		fi
 	done
-	printlog " Total Size file upload : $(du -sh $out)"
+	printlog " Total Size file upload : $(du -sh "$out")"
 	printlog " Server : Sourceforge"
 	printlog " Username account sourceforge"
 	echo -n " User name = "
 	read USERNAME
-	cd $out
-	find * -type f -name *MAGISK* | while read INPUT_OUT; do
-	SC=$INPUT_OUT
-	TG=/home/frs/project/litegapps/$SC
-	printlog "- Uploading <$SC> to <$TG>"
-	scp $SC $USERNAME@web.sourceforge.net:$TG
-	if [ $? -eq 0 ]; then
-		#del $SC
-		#rmdir $(dirname $SC) 2>/dev/null
-		echo
-	fi
-	done
-	find * -type f -name *RECOVERY* | while read INPUT_OUT; do
-	SC=$INPUT_OUT
-	TG=/home/frs/project/litegapps/$SC
-	printlog "- Uploading <$SC> to <$TG>"
-	scp $SC $USERNAME@web.sourceforge.net:$TG
-	done
-	find * -type f -name *AUTO* | while read INPUT_OUT; do
-	SC=$INPUT_OUT
-	TG=/home/frs/project/litegapps/$SC
-	printlog "- Uploading <$SC> to <$TG>"
-	scp $SC $USERNAME@web.sourceforge.net:$TG
-	done
-	
+	# Release zips are named LiteGapps-<arch>-<android>-<date>-<status>.zip.
+	# The old *MAGISK* / *RECOVERY* / *AUTO* patterns belonged to the v2.5
+	# naming and match nothing any more, so this used to upload no files at all.
+	upload_zips "$out" || exit 1
 }
 #################################################
 # Restore
@@ -847,13 +862,7 @@ UPDATE_GAPPS_SERVER(){
 	printlog "- Username account sourceforge"
 	echo -n "- User name = "
 	read USERNAME
-	cd $tmp
-	for C in $(find * -name *.zip -type f); do
-		SC=$C
-		TG=/home/frs/project/litegapps/$SC
-		printlog "- Uploading <$SC> to <$TG>"
-		scp $SC $USERNAME@web.sourceforge.net:$TG
-	done
+	upload_zips "$tmp" || exit 1
 	printlog " "
 	printlog "- done"
 	}

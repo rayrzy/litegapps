@@ -216,7 +216,9 @@ make_flashable_litegapps(){
 		cp -pf $tmpfiles/files.tar.$(get_config compression) $tmp77/files/
 		else
 		cp -pf $tmp/files.tar.$(get_config compression) $tmp77/files/
-		rm -rf $tmp/files.tar.$(get_config compression)
+		# ${tmp:?} aborts if $tmp is ever empty, so this can never become
+		# "rm -rf /files.tar.*"; the quotes keep a path with spaces in one piece.
+		rm -rf "${tmp:?}/files.tar.$(get_config compression)"
 		fi
 		# add modules files
 		if [ $(read_config modules) = true ]; then

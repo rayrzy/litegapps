@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #################################################
 # web/start.sh — one-shot deploy of the LiteGapps build panel.
 #
