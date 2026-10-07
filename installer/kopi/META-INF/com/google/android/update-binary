@@ -74,8 +74,9 @@ fi
 if [ -z "$TMPDIR6070" ]; then
 print "[!] Using RAM for extraction, low memory devices may fail"
 TMPDIR6070=/dev/tmp
-# tmp dir di taruh di /tmp agar tidak penuh (dipasah)
-export TMPDIR=/tmp
+# Extract the gapps into a dedicated sub-folder of /tmp: TMPDIR is wiped
+# below, so it must never be /tmp itself (that is the whole recovery tmp).
+export TMPDIR=/tmp/litegapps-tmp
 fi
 export kopi=$TMPDIR6070/kopi
 export MODPATH=$kopi
@@ -502,7 +503,7 @@ fail_install() {
 	print " "
 	$BOOTMODE || restore_env
 	cd /
-	del $TMPDIR6070
+	del $TMPDIR6070 $TMPDIR
 	exit 1
 }
 push_dir() {
@@ -551,7 +552,7 @@ if ! $BOOTMODE; then
 fi
 set_progress 1.1;
 cd /;
-del $TMPDIR6070
+del $TMPDIR6070 $TMPDIR
 print "- Done";
 set_progress 0.3;
 exit 0;

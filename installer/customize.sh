@@ -554,7 +554,7 @@ _check_space() {
         return 0
     fi
 
-    # Keluar jika isinya hanya sub-direktori yang dikecualikan
+    # Nothing to check if the source only holds the excluded sub-directories
     local entry name ex skip has_own=0
     for entry in "$source_dir"/* "$source_dir"/.[!.]*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
@@ -580,7 +580,7 @@ _check_space() {
     done
     local mem_available=$(df -k "$partition_path" | tail -n 1 | tr -s ' ' | cut -d' ' -f4)
 
-    # Validasi apakah hasil du dan df adalah angka, menggunakan 'case' (aman untuk TWRP)
+    # Both du and df must return numbers; 'case' is safe in TWRP
     case "$mem_install" in
         ''|*[!0-9]*)
             sedlog "! Could not detect payload size of $source_dir"
@@ -686,10 +686,10 @@ PARTITION_MEM_CHECK(){
         # cheking memory partition
         if [ "$TYPEINSTALL" = "kopi" ]; then
             printlog "- Checking Memory"
-            # Partisi system: hanya isi yang tetap di system. vendor/product/system_ext
-            # dipindahkan ke partisinya masing-masing oleh update-binary, jadi
-            # ukurannya dikecualikan di sini dan dicek di bawah (berlaku juga untuk
-            # tata letak campuran, misalnya system/ + product/ kecil).
+            # System partition: only what stays on it. update-binary moves
+            # vendor/product/system_ext to their own partitions, so their size
+            # is excluded here and checked below (this also covers mixed
+            # layouts such as a large system/ with a small product/).
             _check_space "system" "$SYSTEM" "$MODPATH/system" "vendor product system_ext"
 
             # Cek sub-partisi secara spesifik
@@ -761,15 +761,30 @@ MEM_CHECK_TMP (){
     fi
 }
 
+# set_prop <key> <value> <file>: the key is matched whole, not as a regex
+# fragment, so "setupwizard.theme" never rewrites "ro.setupwizard.theme".
+# A file that does not exist is left alone instead of being created.
 set_prop() {
-  local property="$1"
-  local value="$2"
-  file_location="$3"
-  if grep -q "${property}" "${file_location}"; then
-    sed -i "s/\(${property}\)=.*/\1=${value}/g" "${file_location}"
-  else
-    echo "${property}=${value}" >>"${file_location}"
-  fi
+	local key="$1" value="$2" file="$3" esc
+	[ -f "$file" ] || return 0
+	esc=$(printf '%s' "$key" | sed 's/[][\.*^$/]/\\&/g')
+	if grep -q "^${esc}=" "$file"; then
+		sed -i "s/^${esc}=.*/${key}=${value}/" "$file"
+	else
+		echo "${key}=${value}" >> "$file"
+	fi
+}
+
+# Prints the product build.prop; it moved to product/etc/ in Android 10.
+PRODUCT_PROP_FILE() {
+	local PP
+	for PP in "$PRODUCT/etc/build.prop" "$PRODUCT/build.prop"; do
+		if [ -f "$PP" ]; then
+			echo "$PP"
+			return 0
+		fi
+	done
+	return 1
 }
 SETUP_WIZARD(){
 	case $TYPEINSTALL in
@@ -790,11 +805,18 @@ SETUP_WIZARD(){
 	PROP_FILE=$SYSTEM/build.prop
 	sedlog "- Backuping $PROP_FILE TO $DIR_BACKUP/build.prop"
 	cp -pf $PROP_FILE $DIR_BACKUP/build.prop
+	PRODUCT_PROP=$(PRODUCT_PROP_FILE)
+	if [ -n "$PRODUCT_PROP" ]; then
+		sedlog "- Backuping $PRODUCT_PROP TO $DIR_BACKUP/product.build.prop"
+		cp -pf $PRODUCT_PROP $DIR_BACKUP/product.build.prop
+	else
+		sedlog "! product build.prop not found, setupwizard.theme not set"
+	fi
 	set_prop "setupwizard.feature.baseline_setupwizard_enabled" "true" "$PROP_FILE"
 	set_prop "ro.setupwizard.enterprise_mode" "1" "$PROP_FILE"
 	set_prop "ro.setupwizard.rotation_locked" "true" "$PROP_FILE"
 	set_prop "setupwizard.enable_assist_gesture_training" "true" "$PROP_FILE"
-	set_prop "setupwizard.theme" "glif_v3_light" "$SYSTEM/product/build.prop"
+	[ -n "$PRODUCT_PROP" ] && set_prop "setupwizard.theme" "glif_v3_light" "$PRODUCT_PROP"
 	set_prop "setupwizard.feature.skip_button_use_mobile_data.carrier1839" "true" "$PROP_FILE"
 	set_prop "setupwizard.feature.show_pai_screen_in_main_flow.carrier1839" "false" "$PROP_FILE"
 	set_prop "setupwizard.feature.show_pixel_tos" "false" "$PROP_FILE"
@@ -967,9 +989,12 @@ if [ -f $DIR_BACKUP/list-debloat ]; then
 fi
 
 
-# restore product/build.prop
+# restore build.prop and the product build.prop
 if [ -f $DIR_BACKUP/build.prop ]; then
 	cp -pf $DIR_BACKUP/build.prop $SYSTEM/build.prop
+fi
+if [ -f $DIR_BACKUP/product.build.prop ] && [ -n "$(PRODUCT_PROP_FILE)" ]; then
+	cp -pf $DIR_BACKUP/product.build.prop "$(PRODUCT_PROP_FILE)"
 fi
 del $DIR_BACKUP
 
@@ -1096,7 +1121,7 @@ if [ -d $TMPDIR/$ARCH/$API/system ]; then
 	sedlog "- Copying system"
 	listlog $TMPDIR
 	cp -af $TMPDIR/$ARCH/$API/system/* $sysdirtarget/
-	del TMPDIR/$ARCH/$API/system
+	del $TMPDIR/$ARCH/$API/system
 fi
 
 MEM_CHECK_TMP
