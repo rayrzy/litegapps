@@ -543,18 +543,50 @@ _check_space() {
     local partition_name="$1"
     local partition_path="$2"
     local source_dir="$3"
+    # $4 (optional) = space-separated sub-directories of $source_dir that are
+    # installed to a different partition (counted by that partition's own check)
+    local exclude_dirs="$4"
+    # Safety margin (KB) on top of the payload size; override with SPACE_MARGIN_KB
+    local margin_kb="${SPACE_MARGIN_KB:-1024}"
 
     # Keluar jika direktori sumber tidak ada atau kosong
     if [ ! -d "$source_dir" ] || [ -z "$(ls -A "$source_dir")" ]; then
         return 0
     fi
 
+    # Keluar jika isinya hanya sub-direktori yang dikecualikan
+    local entry name ex skip has_own=0
+    for entry in "$source_dir"/* "$source_dir"/.[!.]*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name=${entry##*/}
+        skip=0
+        for ex in $exclude_dirs; do
+            [ "$name" = "$ex" ] && skip=1
+        done
+        [ "$skip" -eq 0 ] && has_own=1
+    done
+    [ "$has_own" -eq 0 ] && return 0
+
     printlog "- Checking space for $partition_name partition..."
 
     local mem_install=$(du -sk "$source_dir" | cut -f1)
+    local ex_kb
+    for ex in $exclude_dirs; do
+        if [ -d "$source_dir/$ex" ]; then
+            ex_kb=$(du -sk "$source_dir/$ex" | cut -f1)
+            case "$ex_kb" in ''|*[!0-9]*) ex_kb=0 ;; esac
+            case "$mem_install" in ''|*[!0-9]*) ;; *) mem_install=$((mem_install - ex_kb)) ;; esac
+        fi
+    done
     local mem_available=$(df -k "$partition_path" | tail -n 1 | tr -s ' ' | cut -d' ' -f4)
 
-    # Validasi apakah mem_available adalah angka, menggunakan 'case' (aman untuk TWRP)
+    # Validasi apakah hasil du dan df adalah angka, menggunakan 'case' (aman untuk TWRP)
+    case "$mem_install" in
+        ''|*[!0-9]*)
+            sedlog "! Could not detect payload size of $source_dir"
+            return 1
+            ;;
+    esac
     case "$mem_available" in
         # Jika variabel kosong ATAU mengandung karakter BUKAN angka
         ''|*[!0-9]*)
@@ -566,14 +598,15 @@ _check_space() {
             ;;
     esac
 
+    local mem_required=$((mem_install + margin_kb))
     local mem_install_mb=$((mem_install / 1024))
     local mem_available_mb=$((mem_available / 1024))
 
     sedlog "  Path: $partition_path"
-    sedlog "  Memory required: ${mem_install_mb} MB"
+    sedlog "  Memory required: ${mem_install_mb} MB (+${margin_kb} KB margin)"
     sedlog "  Available memory: ${mem_available_mb} MB"
 
-    if [ "$mem_available" -gt "$mem_install" ]; then
+    if [ "$mem_available" -gt "$mem_required" ]; then
         sedlog "  Status: [OK]"
     else
         printlog "! Status: [ERROR] Insufficient space on $partition_name"
@@ -653,12 +686,14 @@ PARTITION_MEM_CHECK(){
         # cheking memory partition
         if [ "$TYPEINSTALL" = "kopi" ]; then
             printlog "- Checking Memory"
-            # Cek partisi utama (jika ada file di root-nya tapi tidak ada subdir product/system_ext)
-            if [ -d "$MODPATH/system" ] && [ ! -d "$MODPATH/system/product" ] && [ ! -d "$MODPATH/system/system_ext" ] && [ "$(ls -A "$MODPATH/system")" ]; then
-                 _check_space "system" "$SYSTEM" "$MODPATH/system"
-            fi
-            
+            # Partisi system: hanya isi yang tetap di system. vendor/product/system_ext
+            # dipindahkan ke partisinya masing-masing oleh update-binary, jadi
+            # ukurannya dikecualikan di sini dan dicek di bawah (berlaku juga untuk
+            # tata letak campuran, misalnya system/ + product/ kecil).
+            _check_space "system" "$SYSTEM" "$MODPATH/system" "vendor product system_ext"
+
             # Cek sub-partisi secara spesifik
+            _check_space "vendor" "$VENDOR" "$MODPATH/system/vendor"
             _check_space "product" "$PRODUCT" "$MODPATH/system/product"
             _check_space "system_ext" "$SYSTEM_EXT" "$MODPATH/system/system_ext"
 

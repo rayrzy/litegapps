@@ -493,27 +493,44 @@ for MAKE_LIST in system vendor product system_ext; do
 	fi
 done
 	
+#cp helpers: stop on the first failed copy instead of reporting success
+fail_install() {
+	print " "
+	print "! Failed to copy files to $1"
+	print "! Out of space or I/O error. Installation is INCOMPLETE."
+	print "! Some files may already have been written to the device."
+	print " "
+	$BOOTMODE || restore_env
+	cd /
+	del $TMPDIR6070
+	exit 1
+}
+push_dir() {
+	# $1 = source dir, $2 = destination dir
+	cp -rdf "$1"/* "$2"/ || fail_install "$2"
+}
+
 #cp system
 if [ -d $kopi/system ] && ! rmdir $kopi/system 2>/dev/null; then
 print "- Pushing $SYSTEM";
-cp -rdf $kopi/system/* $SYSTEM/;
+push_dir $kopi/system $SYSTEM;
 fi;
 #cp vendor
 	if [ -d $kopi/vendor ] && ! rmdir $kopi/vendor 2>/dev/null; then
 		print "- Pushing $VENDOR";
-		cp -rdf $kopi/vendor/* $VENDOR/;
+		push_dir $kopi/vendor $VENDOR;
 	fi;
 	
 #cp product
 if [ -d $kopi/product ] && ! rmdir $kopi/product 2>/dev/null; then
 		print "- Pushing $PRODUCT";
-		cp -rdf $kopi/product/* $PRODUCT/;
+		push_dir $kopi/product $PRODUCT;
 fi;
 	
 #cp system_ext
 if [ -d $kopi/system_ext ] && ! rmdir $kopi/system_ext 2>/dev/null; then
 		print "- Pushing $SYSTEM_EXT";
-		cp -rdf $kopi/system_ext/* $SYSTEM_EXT/;
+		push_dir $kopi/system_ext $SYSTEM_EXT;
 fi;
 set_progress 8.1;
 	

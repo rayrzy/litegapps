@@ -59,12 +59,11 @@ android.permission.ACCESS_NOTIFICATION_POLICY
 for i in $(pm list package); do
 insetapp=$(echo "$i" | head -n1 | cut -d : -f 2)
   	for setapp in $list_package; do
-  		if [[ "$insetapp" == "$setapp" ]]; then
+  		if [ "$insetapp" = "$setapp" ]; then
   			for setperm_app in $list_perm; do
   				pm grant $insetapp $setperm_app 2>/dev/null && echo "[OK] Set Permissions $insetapp $setperm_app" >> $log \
   				|| echo "[ERROR] Set Permissions $insetapp $setperm_app" >> $log
   			done
-  		else
   		fi
   	done	
 done
