@@ -15,6 +15,7 @@ import {
 	VARIANTS,
 	targetSupported,
 	variantSupported,
+	canonicalSdk,
 	GO_UNSUPPORTED_MSG,
 } from "./targets";
 import { parseTargetKey, targetSpec } from "./buildtargets";
@@ -56,14 +57,15 @@ const JOB_ID_TOKEN = "__JOB_ID__";
 /** Turn a request into an argv array, or throw if anything is off the allowlist. */
 function plan(req: JobRequest): Plan {
 	const arch = req.arch ?? "";
-	const sdk = req.sdk ?? "";
+	// Canonical digits only: the validated value is what reaches build.sh.
+	const sdk = canonicalSdk(req.sdk);
 	const variant = req.variant ?? "";
 
 	const needArch = () => {
 		if (!(ARCHS as readonly string[]).includes(arch)) throw new Error(`bad arch: ${arch}`);
 	};
 	const needSdk = () => {
-		if (!(SDKS as readonly number[]).includes(Number(sdk))) throw new Error(`bad sdk: ${sdk}`);
+		if (!(SDKS as readonly number[]).includes(Number(sdk))) throw new Error(`bad sdk: ${req.sdk ?? ""}`);
 	};
 	// Anything that restores or builds a target must also be a target the
 	// project still supports (see targetSupported in targets.ts).

@@ -47,7 +47,8 @@ git clone git@github.com:litegapps/litegapps.git
 | `packages/` | Addon/apk packaging tool used by variants with `modules=true` (pixel, micro, nano, basic, user, go, core). See `packages/README.md`. |
 | `vps-build.sh` | Unattended multi-arch/sdk build + upload for a self-hosted VPS (no time limit). See [VPS / unattended builds](#vps--unattended-builds). |
 | `sf-build.sh` | Legacy interactive build script for internal/maintainer use on the SourceForge build VPS. |
-| `.github/workflows/` | Build & publish to **your fork's** GitHub Releases via Actions — no VPS needed. See [Building via GitHub Actions](#building-via-github-actions). |
+| `.github/workflows/` | `build-release-*.yml` build & publish to **your fork's** GitHub Releases via Actions — no VPS needed (see [Building via GitHub Actions](#building-via-github-actions)); `ci.yml` runs the checks. |
+| `tests/` | Shell tests for `build.sh`. See [Tests and CI](#tests-and-ci). |
 
 ## Configure
 
@@ -193,6 +194,22 @@ nohup bash vps-build.sh > vps.log 2>&1 &
 
 See `Dockerfile` / `docker-compose.yml` for the containerized setup (SSH
 keys go in `docker/ssh/`, gitignored).
+
+## Tests and CI
+
+```sh
+sh tests/build-sh.test.sh      # build.sh upload + rm guard, with a fake scp
+cd web && npm test             # panel logic: file access, login limiter, sdk checks
+```
+
+Neither needs network access or credentials. The shell tests put a fake `scp`
+first in `PATH` and refuse to run if it is not the one found, so they cannot
+reach SourceForge. The web tests need only Node 22.6 or newer (no `npm install`)
+because they load the TypeScript source directly.
+
+`.github/workflows/ci.yml` runs both on every push to `main` and every pull
+request, plus a syntax check of every shell script. ShellCheck and a full
+`tsc` type check run there as advisory steps until they have passed once.
 
 ## Compression benchmark
 

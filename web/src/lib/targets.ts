@@ -36,6 +36,17 @@ export type JobKind =
  */
 export const X86_LAST_SDK = 30;
 export const ARM_LAST_SDK = 36;
+
+/**
+ * The sdk as the plain decimal string build.sh expects ("36"), or "" for
+ * anything else. Number() alone is not enough as a check: Number("0x24"),
+ * Number(" 36 "), Number("3.6e1") and Number("+36") are all 36, so they used
+ * to pass the allowlist and their raw spelling then went into build.sh's argv.
+ */
+export function canonicalSdk(raw: string | undefined): string {
+	return /^[1-9]\d{0,2}$/.test(raw ?? "") ? (raw as string) : "";
+}
+
 /**
  * Oldest target on every arch, as MIN_SDK in build.sh: Android 5.0-6.0
  * (SDK 21-23) were dropped, so they are not even listed in SDKS.
