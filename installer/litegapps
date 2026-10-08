@@ -182,6 +182,29 @@ com.netease.lztgglobal
 
 
 
+# in_list <item> <list>: success if <item> is one of the whitespace-separated
+# entries of <list>.
+in_list(){
+	local item="$1" entry
+	for entry in $2; do
+		[ "$entry" = "$item" ] && return 0
+	done
+	return 1
+}
+
+# protected_packages: the enabled keyboard(s) and the home launcher(s), one per
+# line. Disabling them in bulk leaves the device without input or a home
+# screen. Every command is optional: if none of them works the list is empty
+# and nothing extra is protected.
+protected_packages(){
+	{
+		ime list -s 2>/dev/null
+		settings get secure default_input_method 2>/dev/null
+		pm query-activities --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null
+		pm resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null
+	} | grep -Eo '[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+' | cut -d / -f1 | sort -u
+}
+
 black_func_1(){
 	local BLACK_LIST_GAMING_1=$DATA/black_list_gaming1
 	if [ -f $DATA/black_list_gaming1 ]; then
@@ -264,15 +287,11 @@ print "- Boost...";
 print " ";
 for z in $(pm list packages -3) $system_list; do
 boost6071=`getp1 $z`
-	for WZ in $blacklist_term; do
-		if [[ "$boost6071" = $WZ ]]; then
-			print "${YELLOW}[SKIP] •> ${WHITE}${boost6071//com.}"
-			break
-		else
-			am force-stop $boost6071 && print "${GREEN}[OK] •> ${WHITE}${boost6071//com.}" || print "${RED}[ERROR] •> ${WHITE}${boost6071//com.}" 2>/dev/null
-			break
-		fi
-	done
+	if in_list "$boost6071" "$blacklist_term"; then
+		print "${YELLOW}[SKIP] •> ${WHITE}${boost6071//com.}"
+	else
+		am force-stop $boost6071 && print "${GREEN}[OK] •> ${WHITE}${boost6071//com.}" || print "${RED}[ERROR] •> ${WHITE}${boost6071//com.}" 2>/dev/null
+	fi
 done
 print "- Done ";
 }
@@ -356,9 +375,10 @@ gaming2(){
 	printmid "${CYAN}Gaming Mode 2${NC}$WHITE"
 	print " ";
 	del $DATA/gaming2_list_apps
+	local keep_enabled="$(protected_packages)"
 		for z in $(pm list packages -3) $system_list; do
 			boost6071=`getp1 $z`
-			 if black_func_2 $boost6071; then
+			 if black_func_2 $boost6071 || in_list "$boost6071" "$keep_enabled"; then
 			 	  print "${YELLOW}[SKIP] •> ${WHITE}${boost6071//com.}"
 			 else	  
 			 	  pm disable $boost6071 >/dev/null 2>&1  && print "${GREEN}[OK] •> ${WHITE}${boost6071//com.}" || print "${GREEN}[ERROR] •> ${WHITE}${boost6071//com.}"
@@ -543,9 +563,10 @@ gaming_about(){
 		print "${CYAN}  • $WAHYU6767"
 	done
 	print "${YELLOW}#.List Apps Gaming Mode 2"
+	local keep_enabled="$(protected_packages)"
 	for z in $(pm list packages -3) $gappslist $syslist; do
 			boost6071=`getp1 $z`
-  			 if black_func_2 $boost6071; then
+  			 if black_func_2 $boost6071 || in_list "$boost6071" "$keep_enabled"; then
 			 	  shift 0
 			   else	  
 			 	  print "${CYAN}  • $boost6071"
@@ -803,18 +824,13 @@ addon_enable_all_apps(){
 	print_title "Enable All Apps"
 	for WAHYU67 in $(pm list packages -d); do
 		local APP_INPUT=`getp1 $WAHYU67`
-		for WAHYU77 in $blacklist_term; do
-			if [ $APP_INPUT != $WAHYU77 ]; then
-				pm enable $(getp1 $WAHYU67) 2>/dev/null | >/dev/null
-				if [ $? -eq 0 ]; then
-					print "${GREEN}[OK] •> $APP_INPUT"
-				else
-					print "${RED}[ERROR] •> $APP_INPUT"
-				fi
-			else
-				print "${YELLOW}[SKIP] <$APP_INPUT>"
-			fi
-		done
+		if in_list "$APP_INPUT" "$blacklist_term"; then
+			print "${YELLOW}[SKIP] <$APP_INPUT>"
+		elif pm enable "$APP_INPUT" >/dev/null 2>&1; then
+			print "${GREEN}[OK] •> $APP_INPUT"
+		else
+			print "${RED}[ERROR] •> $APP_INPUT"
+		fi
 	done
 	end_menu
 	}

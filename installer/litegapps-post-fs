@@ -15,7 +15,7 @@ mkdir -p $(dirname $log)
 echo " " >> $log
 echo "LiteGapps Post Fs" >> $log
 echo "Version=$litegapps_post_fs_version" >> $log
-echo "VersionCode=$litegapps_post_fs_code=1" >> $log
+echo "VersionCode=$litegapps_post_fs_code" >> $log
 echo "Started -> $(date '+%d/%m/%Y %H:%M:%S')" >> $log
 echo " " >> $log
 
@@ -60,13 +60,35 @@ for i in $(pm list package); do
 insetapp=$(echo "$i" | head -n1 | cut -d : -f 2)
   	for setapp in $list_package; do
   		if [ "$insetapp" = "$setapp" ]; then
+  			# One dump per package instead of one `pm grant` per permission. A
+  			# permission the user denied carries USER_SET or USER_FIXED and is left
+  			# alone, so a boot never undoes the user's choice. If the dump is empty
+  			# or lacks the expected lines, every permission is granted as before.
+  			dump=$log.dump
+  			dumpsys package "$insetapp" > "$dump" 2>/dev/null
   			for setperm_app in $list_perm; do
+  				if [ -s "$dump" ]; then
+  					if grep -q "requested permissions:" "$dump" && ! grep -q "$setperm_app" "$dump"; then
+  						echo "[SKIP] Not requested $insetapp $setperm_app" >> $log
+  						continue
+  					fi
+  					state=$(grep "^ *$setperm_app: granted=" "$dump" | head -n1)
+  					case "$state" in
+  						*granted=true*)
+  							echo "[SKIP] Already granted $insetapp $setperm_app" >> $log
+  							continue ;;
+  						*granted=false*USER_SET*|*granted=false*USER_FIXED*)
+  							echo "[SKIP] Denied by user $insetapp $setperm_app" >> $log
+  							continue ;;
+  					esac
+  				fi
   				pm grant $insetapp $setperm_app 2>/dev/null && echo "[OK] Set Permissions $insetapp $setperm_app" >> $log \
   				|| echo "[ERROR] Set Permissions $insetapp $setperm_app" >> $log
   			done
   		fi
   	done	
 done
+rm -f "$log.dump"
 
 echo " " >> $log
 echo "# $(date '+%d/%m/%Y %H:%M:%S')" >> $log

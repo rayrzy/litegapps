@@ -275,7 +275,7 @@ printlog "| Android Version : $ANDROID_VER ($CODENAME)"
 printlog "| Architecture    : $ARCH"
 printlog "| Api             : $(GET_PROP ro.build.version.sdk)"
 printlog "| Density         : $(GET_PROP ro.sf.lcd_density)"
-if [ $(getprop ro.build.ab_update) = "true" ]; then
+if [ "$(getprop ro.build.ab_update)" = "true" ]; then
 	printlog "| Seamless        : A/B (slot $(find_slot))"
 else
 	printlog "| Seamless        : A only"
@@ -286,7 +286,7 @@ printlog "|___________________________________"
 sedlog "|          Developer Mode"
 sedlog "| Boot Mode    : $BOOTMODE"
 sedlog "| System       : $SYSTEM"
-if [ -f /dev/block/by-name/super ]; then
+if [ -e /dev/block/by-name/super ]; then
 	dynamic3=true
 else
 	dynamic3=false
@@ -471,8 +471,10 @@ INITIAL(){
     # 1. Cari lokasi storage
     INITIALIZE_LITEGAPPS_PATH
     
-    # 2. Pastikan folder log ada (Double check)
+    # 2. Start from an empty log folder. This has to happen before the first
+    # printlog: clearing it later deletes everything logged so far.
     if [ -n "$LITEGAPPS" ]; then
+        del "$LITEGAPPS/log"
         mkdir -p "$LITEGAPPS/log" 2>/dev/null
     fi
     
@@ -504,10 +506,6 @@ INITIAL(){
         touch $DIR_TEST/io
         [ -f $DIR_TEST/io ] && del $DIR_TEST || report_bug "/data partition is encrypt or read only"
     fi
-
-    for CCACHE in $LITEGAPPS/log; do
-        test -d $CCACHE && del $CCACHE && cdir $CCACHE || cdir $CCACHE
-    done
 
     INFO $mode
     print " "     

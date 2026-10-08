@@ -97,6 +97,9 @@ debloat_target(){
 		*) return 1 ;;
 	esac
 	name="${e##*/$dir/}"
+	# An entry ending in /app/ or /priv-app/ has no app name; the target would
+	# be the whole app directory, which the restore stage then deletes.
+	[ -n "$name" ] || return 1
 	case "$e" in
 		*/product/$dir/*) echo "$S/product/$dir/$name" ;;
 		*/system_ext/$dir/*) echo "$S/system_ext/$dir/$name" ;;
@@ -177,6 +180,7 @@ case "$1" in
 			while IFS= read -r E; do
 				T="$(debloat_target "$E")" || continue
 				T="$(out "$T")"
+				[ -n "$T" ] || continue
 				if [ -e "$T" ]; then
 					print "- Removing $T"
 					rm -rf "$T"
